@@ -107,54 +107,52 @@ class LighterClient:
         """WebSocket 主循环"""
         reconnect_count = 0
         max_reconnect_delay = 30
+        message_count = 0
 
         while not self._ws_stop:
             try:
-                # 使用较长的 ping 间隔和超时，让服务器主导心跳
+                # 禁用客户端 ping，让服务器主导心跳
+                # 服务器发送 ping 时，websockets 库会自动响应 pong
                 async with websockets.connect(
                     self.ws_url,
-                    ping_interval=30,  # 每 30 秒发送 ping
-                    ping_timeout=60,   # 60 秒超时
+                    ping_interval=20,   # 客户端每 20 秒发送 ping
+                    ping_timeout=30,    # 30 秒内没收到 pong 则超时
                     close_timeout=5
                 ) as ws:
                     self.ws = ws
                     self._ws_connected = True
                     reconnect_count = 0
+                    message_count = 0
 
-                    # 订阅订单簿 - 尝试多种格式
-                    subscription_formats = [
-                        {'method': 'subscribe', 'params': [f'order_book/{self.market_index}']},
-                        {'op': 'subscribe', 'channel': 'orderbook', 'market': self.market_index},
-                        {'type': 'subscribe', 'channel': f'orderbook.{self.market_index}'},
-                    ]
-
-                    # 尝试第一种格式
-                    await ws.send(json.dumps(subscription_formats[0]))
+                    # 订阅订单簿
+                    subscribe_msg = {'method': 'subscribe', 'params': [f'order_book/{self.market_index}']}
+                    await ws.send(json.dumps(subscribe_msg))
                     logger.info(f"Lighter WebSocket connected, subscribing to market {self.market_index}")
-
-                    # 启动手动心跳任务
-                    heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
                     try:
                         async for message in ws:
                             if self._ws_stop:
                                 break
+                            message_count += 1
+
+                            # 每 50 条消息打印一次状态
+                            if message_count % 50 == 0:
+                                logger.info(f"Lighter WS: received {message_count} messages, order_book_ready={self.order_book_ready}")
+
                             try:
-                                await self._handle_ws_message(json.loads(message))
+                                data = json.loads(message)
+                                await self._handle_ws_message(data)
                             except json.JSONDecodeError:
-                                logger.warning(f"Invalid JSON received: {message[:100]}")
-                    finally:
-                        heartbeat_task.cancel()
-                        try:
-                            await heartbeat_task
-                        except asyncio.CancelledError:
-                            pass
+                                # 可能是非 JSON 消息（如 ping/pong）
+                                logger.debug(f"Non-JSON message: {message[:50]}")
+                    except Exception as e:
+                        logger.error(f"Error in message loop: {type(e).__name__}: {e}")
 
             except websockets.exceptions.ConnectionClosed as e:
-                logger.warning(f"Lighter WebSocket closed: code={e.code}, reason={e.reason}")
+                logger.warning(f"Lighter WebSocket closed: code={e.code}, reason={e.reason}, messages_received={message_count}")
                 self._ws_connected = False
             except asyncio.TimeoutError:
-                logger.warning("Lighter WebSocket connection timeout")
+                logger.warning(f"Lighter WebSocket timeout, messages_received={message_count}")
                 self._ws_connected = False
             except Exception as e:
                 logger.error(f"Lighter WebSocket error: {type(e).__name__}: {e}")
@@ -170,31 +168,24 @@ class LighterClient:
         """检查 WebSocket 是否打开（兼容不同版本）"""
         if self.ws is None:
             return False
-        # 兼容不同版本的 websockets 库
         if hasattr(self.ws, 'closed'):
             return not self.ws.closed
         elif hasattr(self.ws, 'close_code'):
             return self.ws.close_code is None
         return False
 
-    async def _heartbeat_loop(self):
-        """手动心跳循环"""
-        while not self._ws_stop and self._is_ws_open():
-            try:
-                # 每 30 秒发送心跳
-                await asyncio.sleep(30)
-                if self._is_ws_open():
-                    await self.ws.send(json.dumps({'method': 'ping'}))
-            except Exception as e:
-                logger.debug(f"Heartbeat error: {e}")
-                break
-
     async def _handle_ws_message(self, data: Dict[str, Any]):
         """处理 WebSocket 消息"""
         try:
-            # 调试：打印收到的消息类型
-            msg_keys = list(data.keys())[:5] if isinstance(data, dict) else str(type(data))
-            logger.debug(f"Lighter WS message keys: {msg_keys}")
+            # 打印消息类型用于调试
+            msg_type = data.get('type') or data.get('method') or list(data.keys())[:3]
+
+            # 处理服务器发送的 ping（应用层）
+            if data.get('type') == 'ping' or data.get('method') == 'ping':
+                logger.debug("Received application-level ping, sending pong")
+                if self._is_ws_open():
+                    await self.ws.send(json.dumps({'type': 'pong'}))
+                return
 
             # 处理订单簿快照
             if 'order_book' in data:
@@ -205,6 +196,10 @@ class LighterClient:
                 self._update_order_book(bids, asks, is_snapshot=True)
                 self.order_book_ready = True
                 logger.info(f"Lighter order book snapshot: {len(bids)} bids, {len(asks)} asks")
+                if bids:
+                    logger.info(f"  Best bid: {bids[0]}")
+                if asks:
+                    logger.info(f"  Best ask: {asks[0]}")
 
             # 处理订单簿增量更新
             elif data.get('type') == 'order_book_update':
@@ -221,9 +216,10 @@ class LighterClient:
                         **data.get('data', {})
                     })
 
-            # 处理心跳
-            elif data.get('method') == 'ping' or data.get('type') == 'ping':
-                await self.ws.send(json.dumps({'method': 'pong'}))
+            # 记录其他未处理的消息类型
+            else:
+                msg_keys = list(data.keys())[:5]
+                logger.debug(f"Unhandled Lighter message: keys={msg_keys}")
 
         except Exception as e:
             logger.error(f"Error handling Lighter WS message: {e}")
