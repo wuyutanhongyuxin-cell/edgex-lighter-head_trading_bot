@@ -68,7 +68,7 @@
     class EdgeXClient {
         constructor(config) {
             this.baseUrl = 'https://pro.edgex.exchange';
-            this.wsUrl = 'wss://quote.edgex.exchange';
+            this.wsUrl = 'wss://spot-quote.edgex.exchange/api/v1/public/ws';
             this.accountId = config.accountId;
             this.starkPrivateKey = config.starkPrivateKey;
             this.contractId = config.contractId;
