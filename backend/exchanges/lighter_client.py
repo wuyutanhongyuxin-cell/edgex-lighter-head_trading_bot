@@ -110,12 +110,11 @@ class LighterClient:
 
         while not self._ws_stop:
             try:
-                # 禁用自动 ping 以避免服务器不支持导致的 "no pong" 错误
-                # 我们将手动处理心跳
+                # 使用较长的 ping 间隔和超时，让服务器主导心跳
                 async with websockets.connect(
                     self.ws_url,
-                    ping_interval=None,  # 禁用自动 ping
-                    ping_timeout=None,
+                    ping_interval=30,  # 每 30 秒发送 ping
+                    ping_timeout=60,   # 60 秒超时
                     close_timeout=5
                 ) as ws:
                     self.ws = ws
@@ -193,6 +192,10 @@ class LighterClient:
     async def _handle_ws_message(self, data: Dict[str, Any]):
         """处理 WebSocket 消息"""
         try:
+            # 调试：打印收到的消息类型
+            msg_keys = list(data.keys())[:5] if isinstance(data, dict) else str(type(data))
+            logger.debug(f"Lighter WS message keys: {msg_keys}")
+
             # 处理订单簿快照
             if 'order_book' in data:
                 order_book = data.get('order_book', {})

@@ -106,25 +106,29 @@ chrome.runtime.onConnect.addListener((port) => {
     if (port.name !== 'edgex-bridge') return;
 
     const tabId = port.sender?.tab?.id;
-    console.log('[Bridge] Content script connected, tab:', tabId);
+    console.log('[Bridge] Content script connected, tab:', tabId, 'isConnected:', isConnected);
 
     contentPorts.set(tabId, port);
 
-    // 如果已经连接到后端，通知新连接的 content script
-    if (isConnected) {
-        port.postMessage({ type: 'backend_connected' });
-    }
-
-    // 监听来自 content script 的消息
+    // 监听来自 content script 的消息 - 必须先注册监听器
     port.onMessage.addListener((message) => {
+        console.log('[Bridge] Received message from content:', message.type, 'isConnected:', isConnected);
         if (message.type === 'connect_backend') {
             // 如果已经连接，立即通知
             if (isConnected) {
-                port.postMessage({ type: 'backend_connected' });
+                console.log('[Bridge] Already connected, sending backend_connected to content');
+                try {
+                    port.postMessage({ type: 'backend_connected' });
+                    console.log('[Bridge] Sent backend_connected to content');
+                } catch (e) {
+                    console.error('[Bridge] Failed to send backend_connected:', e);
+                }
             } else {
+                console.log('[Bridge] Not connected, initiating connection');
                 connectToBackend();
             }
         } else if (message.type === 'send_to_backend') {
+            console.log('[Bridge] Forwarding to backend:', message.data?.type);
             sendToBackend(message.data);
         }
     });
@@ -133,6 +137,19 @@ chrome.runtime.onConnect.addListener((port) => {
         console.log('[Bridge] Content script disconnected, tab:', tabId);
         contentPorts.delete(tabId);
     });
+
+    // 如果已经连接到后端，稍微延迟后通知新连接的 content script
+    // 延迟确保消息监听器已完全注册
+    if (isConnected) {
+        setTimeout(() => {
+            try {
+                console.log('[Bridge] Sending initial backend_connected to new content script');
+                port.postMessage({ type: 'backend_connected' });
+            } catch (e) {
+                console.error('[Bridge] Failed to send initial backend_connected:', e);
+            }
+        }, 50);
+    }
 });
 
 // 启动时尝试连接
