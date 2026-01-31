@@ -1,0 +1,15 @@
+# EdgeX-Lighter Arbitrage Backend Requirements
+
+# Core
+python-dotenv>=1.0.0
+websockets>=12.0
+aiohttp>=3.9.0
+
+# Lighter SDK (可选,如果有的话)
+# lighter-python
+
+# Utilities
+tenacity>=8.2.0
+
+# Logging
+colorlog>=6.8.0
