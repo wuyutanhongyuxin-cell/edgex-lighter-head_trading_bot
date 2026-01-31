@@ -124,10 +124,18 @@ class LighterClient:
                     reconnect_count = 0
                     message_count = 0
 
-                    # 订阅订单簿
-                    subscribe_msg = {'method': 'subscribe', 'params': [f'order_book/{self.market_index}']}
-                    await ws.send(json.dumps(subscribe_msg))
+                    # 订阅订单簿 - 尝试不同格式
                     logger.info(f"Lighter WebSocket connected, subscribing to market {self.market_index}")
+
+                    # 格式1: 通用格式
+                    sub1 = {'method': 'subscribe', 'params': [f'order_book/{self.market_index}']}
+                    await ws.send(json.dumps(sub1))
+                    logger.info(f"Sent subscription: {sub1}")
+
+                    # 格式2: 带 id
+                    sub2 = {'id': 1, 'method': 'subscribe', 'params': {'channel': 'orderbook', 'market_index': self.market_index}}
+                    await ws.send(json.dumps(sub2))
+                    logger.info(f"Sent subscription: {sub2}")
 
                     try:
                         async for message in ws:
@@ -135,16 +143,17 @@ class LighterClient:
                                 break
                             message_count += 1
 
-                            # 每 50 条消息打印一次状态
-                            if message_count % 50 == 0:
+                            # 打印前 20 条消息用于调试
+                            if message_count <= 20:
+                                logger.info(f"Lighter WS msg #{message_count}: {message[:200]}")
+                            elif message_count % 100 == 0:
                                 logger.info(f"Lighter WS: received {message_count} messages, order_book_ready={self.order_book_ready}")
 
                             try:
                                 data = json.loads(message)
                                 await self._handle_ws_message(data)
                             except json.JSONDecodeError:
-                                # 可能是非 JSON 消息（如 ping/pong）
-                                logger.debug(f"Non-JSON message: {message[:50]}")
+                                logger.warning(f"Non-JSON message #{message_count}: {message[:100]}")
                     except Exception as e:
                         logger.error(f"Error in message loop: {type(e).__name__}: {e}")
 
