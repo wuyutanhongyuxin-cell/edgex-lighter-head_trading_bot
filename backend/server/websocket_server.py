@@ -203,10 +203,21 @@ class WebSocketServer:
         except Exception as e:
             logger.error(f"Error handling message: {e}", exc_info=True)
 
+    def _is_ws_open(self, websocket) -> bool:
+        """检查 WebSocket 是否打开（兼容不同版本）"""
+        if websocket is None:
+            return False
+        # 兼容不同版本的 websockets 库
+        if hasattr(websocket, 'open'):
+            return websocket.open
+        elif hasattr(websocket, 'close_code'):
+            return websocket.close_code is None
+        return False
+
     async def _send(self, client_id: str, data: Dict[str, Any]):
         """发送消息到指定客户端"""
         client = self.clients.get(client_id)
-        if client and client.websocket.open:
+        if client and self._is_ws_open(client.websocket):
             try:
                 await client.websocket.send(json.dumps(data))
             except Exception as e:

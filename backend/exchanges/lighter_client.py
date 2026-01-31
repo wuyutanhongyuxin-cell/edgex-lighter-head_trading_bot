@@ -167,13 +167,24 @@ class LighterClient:
                 logger.info(f"Reconnecting Lighter WebSocket in {delay}s... (attempt {reconnect_count})")
                 await asyncio.sleep(delay)
 
+    def _is_ws_open(self) -> bool:
+        """检查 WebSocket 是否打开（兼容不同版本）"""
+        if self.ws is None:
+            return False
+        # 兼容不同版本的 websockets 库
+        if hasattr(self.ws, 'closed'):
+            return not self.ws.closed
+        elif hasattr(self.ws, 'close_code'):
+            return self.ws.close_code is None
+        return False
+
     async def _heartbeat_loop(self):
         """手动心跳循环"""
-        while not self._ws_stop and self.ws and not self.ws.closed:
+        while not self._ws_stop and self._is_ws_open():
             try:
                 # 每 30 秒发送心跳
                 await asyncio.sleep(30)
-                if self.ws and not self.ws.closed:
+                if self._is_ws_open():
                     await self.ws.send(json.dumps({'method': 'ping'}))
             except Exception as e:
                 logger.debug(f"Heartbeat error: {e}")
