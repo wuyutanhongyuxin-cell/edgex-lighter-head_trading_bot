@@ -171,7 +171,7 @@ THRESHOLD_OFFSET=10
 
 # Telegram 配置 (可选)
 TELEGRAM_BOT_TOKEN=your_bot_token
-TELEGRAM_CHAT_ID=your_chat_id
+TELEGRAM_GROUP_ID=your_chat_id
 ```
 
 ### 4️⃣ 启动后端

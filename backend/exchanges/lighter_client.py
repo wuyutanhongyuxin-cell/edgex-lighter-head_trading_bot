@@ -105,39 +105,79 @@ class LighterClient:
 
     async def _run_websocket(self):
         """WebSocket 主循环"""
+        reconnect_count = 0
+        max_reconnect_delay = 30
+
         while not self._ws_stop:
             try:
+                # 禁用自动 ping 以避免服务器不支持导致的 "no pong" 错误
+                # 我们将手动处理心跳
                 async with websockets.connect(
                     self.ws_url,
-                    ping_interval=20,
-                    ping_timeout=10
+                    ping_interval=None,  # 禁用自动 ping
+                    ping_timeout=None,
+                    close_timeout=5
                 ) as ws:
                     self.ws = ws
                     self._ws_connected = True
+                    reconnect_count = 0
 
-                    # 订阅订单簿
-                    await ws.send(json.dumps({
-                        'method': 'subscribe',
-                        'params': [f'order_book/{self.market_index}']
-                    }))
+                    # 订阅订单簿 - 尝试多种格式
+                    subscription_formats = [
+                        {'method': 'subscribe', 'params': [f'order_book/{self.market_index}']},
+                        {'op': 'subscribe', 'channel': 'orderbook', 'market': self.market_index},
+                        {'type': 'subscribe', 'channel': f'orderbook.{self.market_index}'},
+                    ]
 
-                    logger.info("Lighter WebSocket connected")
+                    # 尝试第一种格式
+                    await ws.send(json.dumps(subscription_formats[0]))
+                    logger.info(f"Lighter WebSocket connected, subscribing to market {self.market_index}")
 
-                    async for message in ws:
-                        if self._ws_stop:
-                            break
-                        await self._handle_ws_message(json.loads(message))
+                    # 启动手动心跳任务
+                    heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+
+                    try:
+                        async for message in ws:
+                            if self._ws_stop:
+                                break
+                            try:
+                                await self._handle_ws_message(json.loads(message))
+                            except json.JSONDecodeError:
+                                logger.warning(f"Invalid JSON received: {message[:100]}")
+                    finally:
+                        heartbeat_task.cancel()
+                        try:
+                            await heartbeat_task
+                        except asyncio.CancelledError:
+                            pass
 
             except websockets.exceptions.ConnectionClosed as e:
-                logger.warning(f"Lighter WebSocket closed: {e}")
+                logger.warning(f"Lighter WebSocket closed: code={e.code}, reason={e.reason}")
+                self._ws_connected = False
+            except asyncio.TimeoutError:
+                logger.warning("Lighter WebSocket connection timeout")
                 self._ws_connected = False
             except Exception as e:
-                logger.error(f"Lighter WebSocket error: {e}")
+                logger.error(f"Lighter WebSocket error: {type(e).__name__}: {e}")
                 self._ws_connected = False
 
             if not self._ws_stop:
-                logger.info("Reconnecting Lighter WebSocket in 2s...")
-                await asyncio.sleep(2)
+                reconnect_count += 1
+                delay = min(2 ** reconnect_count, max_reconnect_delay)
+                logger.info(f"Reconnecting Lighter WebSocket in {delay}s... (attempt {reconnect_count})")
+                await asyncio.sleep(delay)
+
+    async def _heartbeat_loop(self):
+        """手动心跳循环"""
+        while not self._ws_stop and self.ws and not self.ws.closed:
+            try:
+                # 每 30 秒发送心跳
+                await asyncio.sleep(30)
+                if self.ws and not self.ws.closed:
+                    await self.ws.send(json.dumps({'method': 'ping'}))
+            except Exception as e:
+                logger.debug(f"Heartbeat error: {e}")
+                break
 
     async def _handle_ws_message(self, data: Dict[str, Any]):
         """处理 WebSocket 消息"""

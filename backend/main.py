@@ -661,27 +661,84 @@ async def main():
     system = ArbitrageSystem(config)
 
     # 信号处理
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
+    shutdown_event = asyncio.Event()
 
     def handle_signal():
         logger.info("Received shutdown signal")
-        asyncio.create_task(system.stop())
+        shutdown_event.set()
+        system.stop_flag = True
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, handle_signal)
-        except NotImplementedError:
-            # Windows 不支持 add_signal_handler
-            pass
+    # 尝试注册信号处理器 (Unix)
+    import sys
+    if sys.platform != 'win32':
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, handle_signal)
+            except NotImplementedError:
+                pass
+    else:
+        # Windows: 使用线程监听 Ctrl+C
+        import threading
+
+        def windows_signal_handler():
+            """Windows 平台的信号监听线程"""
+            import msvcrt
+            while not shutdown_event.is_set():
+                try:
+                    # 检查是否有键盘输入
+                    if msvcrt.kbhit():
+                        key = msvcrt.getch()
+                        # Ctrl+C = 0x03
+                        if key == b'\x03':
+                            logger.info("Ctrl+C detected (Windows)")
+                            loop.call_soon_threadsafe(handle_signal)
+                            break
+                    time.sleep(0.1)
+                except Exception:
+                    break
+
+        # 同时设置传统的信号处理
+        def ctrl_c_handler(signum, frame):
+            logger.info("SIGINT received (Windows)")
+            loop.call_soon_threadsafe(handle_signal)
+
+        signal.signal(signal.SIGINT, ctrl_c_handler)
+
+        # 启动监听线程作为备份
+        signal_thread = threading.Thread(target=windows_signal_handler, daemon=True)
+        signal_thread.start()
+
+    async def run_with_shutdown():
+        """运行系统并监听关闭信号"""
+        # 启动系统任务
+        system_task = asyncio.create_task(system.start())
+        shutdown_task = asyncio.create_task(shutdown_event.wait())
+
+        # 等待系统完成或收到关闭信号
+        done, pending = await asyncio.wait(
+            [system_task, shutdown_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+
+        # 取消未完成的任务
+        for task in pending:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     try:
-        await system.start()
+        await run_with_shutdown()
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt received")
+        handle_signal()
     except Exception as e:
         logger.error(f"System error: {e}", exc_info=True)
     finally:
-        await system.stop()
+        if not system.stop_flag:
+            await system.stop()
 
 
 if __name__ == '__main__':
