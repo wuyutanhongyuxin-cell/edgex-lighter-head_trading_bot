@@ -118,7 +118,12 @@ chrome.runtime.onConnect.addListener((port) => {
     // 监听来自 content script 的消息
     port.onMessage.addListener((message) => {
         if (message.type === 'connect_backend') {
-            connectToBackend();
+            // 如果已经连接，立即通知
+            if (isConnected) {
+                port.postMessage({ type: 'backend_connected' });
+            } else {
+                connectToBackend();
+            }
         } else if (message.type === 'send_to_backend') {
             sendToBackend(message.data);
         }
