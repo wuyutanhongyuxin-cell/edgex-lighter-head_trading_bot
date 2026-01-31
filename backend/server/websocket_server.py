@@ -51,8 +51,8 @@ class WebSocketServer:
             self._handle_connection,
             self.host,
             self.port,
-            ping_interval=20,
-            ping_timeout=10
+            ping_interval=None,  # 禁用自动 ping，避免兼容性问题
+            ping_timeout=None
         )
         self._running = True
         logger.info(f"WebSocket server started on ws://{self.host}:{self.port}")
@@ -85,6 +85,16 @@ class WebSocketServer:
         )
 
         logger.info(f"Client connected: {client_id}")
+
+        # 发送连接确认消息
+        try:
+            await websocket.send(json.dumps({
+                'type': 'welcome',
+                'message': 'Connected to EdgeX-Lighter Arbitrage Backend',
+                'timestamp': int(datetime.now().timestamp() * 1000)
+            }))
+        except Exception as e:
+            logger.error(f"Failed to send welcome message: {e}")
 
         try:
             async for message in websocket:
