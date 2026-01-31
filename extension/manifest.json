@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "EdgeX Arbitrage Bridge",
+  "version": "1.0",
+  "description": "Bridge for EdgeX-Lighter arbitrage system",
+  "permissions": [],
+  "host_permissions": [
+    "ws://localhost:8765/*",
+    "ws://127.0.0.1:8765/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://pro.edgex.exchange/*"],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "icons": {
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}
